@@ -3,4 +3,19 @@ Demo for generalized ctDNA SNV pipelines
 
 
 
-<img width="1163" height="351" alt="Screenshot 2025-07-16 at 22 21 42" src="https://github.com/user-attachments/assets/6cd0f30a-0429-4dbe-956e-db2534480319" />
+
+<img width="1122" height="419" alt="Screenshot 2025-07-16 at 22 33 59" src="https://github.com/user-attachments/assets/e18144e9-0d36-4c37-8263-9af3512b5b86" />
+
+
+SNV/
+├── Snakefiles               
+├── configs/
+│   └── config.yaml         
+├── rules/
+|   ├── trimming
+│   ├── mapping         
+│   ├── variant_calling  
+│   └── annotation + tsv output     
+├── Logs/                     
+└── envs/       
+<img width="468" height="238" alt="image" src="https://github.com/user-attachments/assets/60f3ef82-a7ec-4571-a52a-3d0f165bac2d" />
