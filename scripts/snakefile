@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 # Configuration
 configfile: "PATH/config.yaml"
 
-# Global global log system and runtime hooks (onstart/onsuccess/onerror) for robust automation.
+# Global log system and runtime hooks (onstart/onsuccess/onerror) for automation.
 if 'timestamp' not in globals():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
