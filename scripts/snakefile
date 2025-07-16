@@ -1,0 +1,182 @@
+############################################
+## Pipeline for generating TSV from VCF    #
+## from SNV detection                      #
+## Author : Yaqun LIU                      #
+## Date :  2025                            #
+############################################
+
+import datetime
+import os
+import csv
+import re
+from decimal import Decimal, InvalidOperation
+
+# Configuration
+configfile: "PATH/config.yaml"
+
+# Global global log system and runtime hooks (onstart/onsuccess/onerror) for robust automation.
+if 'timestamp' not in globals():
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+logpath = f"./logs/customlog_{timestamp}.log"
+
+def printlog(logmessage):
+    shell("echo $(date) - {logmessage} && echo $(date) - {logmessage} >> {logpath}")
+
+def shutdownOnStop():
+    if config.get("SOS", False):
+        printlog("------ Shutting Down Machine")
+        shell("sudo shutdown now")
+
+onstart:
+    shell("mkdir -p {dir}/results/MPVlogs")
+    printlog("------ Starting workflow")
+    shell("echo $(date) - Config file: {config[configName]} >> {logpath}")
+
+onsuccess:
+    printlog("------ Workflow ended successfully")
+    shell("touch {dir}/results/MPVlogs/finished.txt")
+    shutdownOnStop()
+
+onerror:
+    printlog("------ Workflow ended with error")
+    failed_log = f"{dir}/results/MPVlogs/failedrun_" + os.path.basename(log)
+    failed_logpath = f"{dir}/results/MPVlogs/failedrun_" + os.path.basename(logpath)
+    shell("mkdir -p {dir}/results/MPVlogs")
+    shell("cp {log} {failed_log}")
+    shell("cp {logpath} {failed_logpath}")
+    shutdownOnStop()
+
+rule all:
+    input:
+        expand("{dir}/results/tsv/{samples}.tsv",samples=config["SAMPLES"],dir=config["DIR"]),
+	expand("{dir}/results/tsv/{samples}_fin.tsv",samples=config["SAMPLES"],dir=config["DIR"])
+
+
+
+
+# generate the vcf into tsv format
+rule vcf_to_tsv:
+    input:
+        "{dir}/{sample}.vcf.gz"
+    output:
+        "{dir}/results/tsv/{samples}.tsv"
+    threads:
+        config["nb_threads"]
+    resources:
+        mem_mb=config["mem_mb"]
+    run:
+        printlog("Running generation of TSV from VCF")
+
+        shell("""
+        sample="{wildcards.samples}"
+        
+        prefix=$(echo "$sample" | cut -d'-' -f1)
+        
+        first_number=$(echo "$sample" | grep -oE '[0-9]+' | head -n1)
+        #extract INFO fields from vcf and format'em
+        INFO_FIELDS=$(bcftools view -h "{input}" | awk -F'[=<,]' '/^##INFO=/ {{print $4}}' | tr '\n' '\t' | sed 's/\t$//')
+        #extract the consequences fields and format
+        CSQ_FIELDS=$(bcftools view -h "{input}" | grep "^##INFO=<ID=CSQ" | sed -E 's/.*Format: //; s/">$//g' | tr '|' '\t')
+        
+        CSQ_HEADER=$(echo "$CSQ_FIELDS" | tr '\t' '\n' | sed 's/^/CSQ_/' | paste -sd '\t' -)
+        #prep header for tsv
+        printf "UID\tSAMPLE_TYPE\tPATIENT_NUM\tVAF\tCHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\t%s\t%s\n" "$(echo "$INFO_FIELDS" | sed 's/\tCSQ//')" "$CSQ_HEADER" > "{output}"
+
+        #reformat INFO fields
+        INFO_FORMAT=$(echo "$INFO_FIELDS" | sed "s/\\t/\\n/g" | awk '{{print "%INFO/" $0}}' | paste -sd "\t" -)
+        
+        bcftools query -f "%CHROM\t%POS\t%ID\t%REF\t%ALT\t%QUAL\t%FILTER\t$INFO_FORMAT\n" "{input}" | awk -F"\t" -v csq_fields="$CSQ_FIELDS" ' BEGIN {{
+            OFS="\t";
+            split(csq_fields, csq_fields_arr, "\t"); #generating CSQ columns
+            csq_len = length(csq_fields_arr);
+           
+        }}
+        {{
+            
+            for (i=1; i<NF; i++) {{
+                printf "%s\t", $i;
+            }}
+
+            CSQ = $NF;  
+            
+            split(CSQ, csq_values, "|");
+            
+            for (i=1; i<=csq_len; i++) {{
+                if (i in csq_values) {{
+                    printf "%s\t", csq_values[i];
+                }} else {{
+                    printf "NA\t";
+                }}
+            }}
+            
+            print "";
+        }}' | awk 'BEGIN {{FS="\t"; OFS="\t"}} 
+        {{
+            if (NR >= 1) $3 = "{wildcards.samples}";  
+            print $0;
+        }}' | awk -v prefix="$prefix" -v first_number="$first_number" 'BEGIN {{FS="\t"; OFS="\t"}} #add VAF column 
+        {{
+            DP = $9;  
+            AO = $15;
+            if (DP > 0) {{
+                VAF = (AO / DP) * 100;
+                printf "%s\t%s\t%.3f\t%s\t\\n", prefix,first_number,VAF,$0; 
+            }} else {{
+                printf "%s\t%s\t%.3f\t%s\t\\n", prefix,first_number,"NA",$0;
+            }}
+        }}' | awk 'BEGIN {{FS="\t"; OFS="\t"}} #generate UID
+        {{
+            UID = "{wildcards.samples}" "." $4 "." $5 "." $7 "." $8;  
+            print UID, $0;
+        }}' >> "{output}"
+        
+        """)
+        printlog("Finished generation of TSV tables from VCFs")
+
+
+rule check_and_pruning_fields_in_tsv:
+    input:
+        "{dir}/results/tsv/{samples}.tsv"
+    output:
+        "{dir}/results/tsv/{samples}_fin.tsv"
+    threads:
+        config["nb_threads"]
+    resources:
+        mem_mb=config["mem_mb"]
+    run:
+	printlog("Checking tsv's fields and pruning")
+        samples = wildcards.samples
+        logpath = config["logpath"]
+        
+        # check required fields
+        field_key = f"required_fields"
+        if field_key not in config:
+            raise ValueError(f"Missing required fields list in the config file")
+
+        required_fields = config[field_key]
+
+
+        with open(input[0], newline='') as infile:
+            reader = csv.DictReader(infile, delimiter='\t')
+            input_fields = reader.fieldnames
+            # check'n put missing info into log
+            missing_fields = [f for f in required_fields if f not in input_fields]
+
+            if missing_fields:
+                warning = f"[!!!WARNING!!!] Sample {samples}: Missing fields: {', '.join(missing_fields)}. Filling with 'NA'.\n"
+                print(warning.strip())
+                with open(logpath, "a") as log_file:
+                    log_file.write(warning)
+
+
+            with open(output[0], "w", newline='') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=required_fields, delimiter='\t')
+                writer.writeheader()
+                for row in reader:
+                    filtered_row = {field: row.get(field, "NA") for field in required_fields}
+                    writer.writerow(filtered_row)
+	printlog("Finished checking tsv's fields and pruning")
+
+
+
