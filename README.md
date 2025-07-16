@@ -9,13 +9,9 @@ Demo for generalized ctDNA SNV pipelines
 
 SNV/
 
-|-- Snakefiles 
-
-|-- configs/
+|-- configs/config.yaml 
    
-   |── config.yaml 
-   
-|-- rules/
+|-- Snakefiles/
 
        |-- trimming
        
